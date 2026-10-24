@@ -78,6 +78,82 @@ def construir_etapa3(texto, total_bits=224):
 
     return bitstream[:total_bits], MODO, contador_longitud, datos_binarios, terminador
 
+# ---------------------------------------------------------------
+# ETAPA 4: matriz QR e inserción de bits en zigzag
+# ---------------------------------------------------------------
+TAMANO = 25  # Versión 2 = 25x25 módulos
+
+def crear_matriz():
+    matriz = [[None] * TAMANO for _ in range(TAMANO)]
+    reservado = [[False] * TAMANO for _ in range(TAMANO)]
+    return matriz, reservado
+
+def colocar_finder(matriz, reservado, f0, c0):
+    """Finder 7x7 + separador (área de 8x8 reservada)"""
+    for r in range(-1, 8):
+        for c in range(-1, 8):
+            fr, fc = f0 + r, c0 + c
+            if 0 <= fr < TAMANO and 0 <= fc < TAMANO:
+                reservado[fr][fc] = True
+                dentro = 0 <= r <= 6 and 0 <= c <= 6
+                oscuro = dentro and (r in (0, 6) or c in (0, 6) or (2 <= r <= 4 and 2 <= c <= 4))
+                matriz[fr][fc] = 1 if oscuro else 0
+
+def colocar_timing(matriz, reservado):
+    for i in range(8, TAMANO - 8):
+        valor = 1 if i % 2 == 0 else 0
+        matriz[6][i] = valor; reservado[6][i] = True
+        matriz[i][6] = valor; reservado[i][6] = True
+
+def colocar_alineacion(matriz, reservado, centro=18):
+    for r in range(-2, 3):
+        for c in range(-2, 3):
+            reservado[centro + r][centro + c] = True
+            matriz[centro + r][centro + c] = 0 if max(abs(r), abs(c)) == 1 else 1
+
+def reservar_formato(reservado):
+    """Reserva las áreas de información de formato (se llenan en la etapa de máscara)"""
+    for i in range(9):
+        reservado[8][i] = True
+        reservado[i][8] = True
+    for i in range(TAMANO - 8, TAMANO):
+        reservado[8][i] = True
+        reservado[i][8] = True
+
+def preparar_matriz():
+    matriz, reservado = crear_matriz()
+    colocar_finder(matriz, reservado, 0, 0)
+    colocar_finder(matriz, reservado, 0, TAMANO - 7)
+    colocar_finder(matriz, reservado, TAMANO - 7, 0)
+    colocar_timing(matriz, reservado)
+    colocar_alineacion(matriz, reservado)
+    reservar_formato(reservado)
+    matriz[4 * 2 + 9][8] = 1          # módulo oscuro (fila 17, col 8)
+    reservado[4 * 2 + 9][8] = True
+    return matriz, reservado
+
+def colocar_bits_zigzag(matriz, reservado, bits):
+    """Inserta los bits en zigzag. Devuelve cuántos bits se colocaron."""
+    columna = TAMANO - 1
+    subiendo = True
+    idx = 0
+    while columna > 0:
+        if columna == 6:              # se salta la columna de timing
+            columna -= 1
+        filas = range(TAMANO - 1, -1, -1) if subiendo else range(TAMANO)
+        for fila in filas:
+            for c in (columna, columna - 1):   # derecha primero, luego izquierda
+                if not reservado[fila][c]:
+                    matriz[fila][c] = int(bits[idx]) if idx < len(bits) else 0
+                    idx += 1
+        subiendo = not subiendo
+        columna -= 2
+    return idx
+
+def mostrar_matriz(matriz):
+    for fila in matriz:
+        print("".join("██" if v == 1 else "  " if v == 0 else "··" for v in fila))
+
 # main / simulación
 if __name__ == "__main__":
     texto = input("Escribe el texto a convertir: ")
@@ -102,6 +178,13 @@ if __name__ == "__main__":
         print("Terminador:      ", terminador)
         print("Bitstream final: ", bitstream)
         print("Bits totales:    ", len(bitstream))
+
+        # ETAPA 4: matriz y zigzag
+        matriz, reservado = preparar_matriz()
+        total = colocar_bits_zigzag(matriz, reservado, bitstream)
+        print("\n--- RESULTADOS ETAPA 4 ---")
+        print("Módulos de datos disponibles:", total)  # debe dar 359
+        mostrar_matriz(matriz)
 
     except ValueError as e:
         print(f"\nError de validación: {e}")
