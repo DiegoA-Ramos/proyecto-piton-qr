@@ -220,6 +220,83 @@ def mostrar_matriz(matriz):
     for fila in matriz:
         print("".join("██" if v == 1 else "  " if v == 0 else "··" for v in fila))
 
+# ---------------------------------------------------------------
+# ETAPA 5: enmascaramiento (máscara QR)
+# ---------------------------------------------------------------
+# Fórmulas del estándar: si la condición es True, se invierte el módulo (XOR 1).
+# i = fila, j = columna. Se usa la MÁSCARA 0: (i + j) mod 2 == 0
+MASCARAS = {
+    0: lambda i, j: (i + j) % 2 == 0,
+    1: lambda i, j: i % 2 == 0,
+    2: lambda i, j: j % 3 == 0,
+    3: lambda i, j: (i + j) % 3 == 0,
+    4: lambda i, j: (i // 2 + j // 3) % 2 == 0,
+    5: lambda i, j: (i * j) % 2 + (i * j) % 3 == 0,
+    6: lambda i, j: ((i * j) % 2 + (i * j) % 3) % 2 == 0,
+    7: lambda i, j: ((i + j) % 2 + (i * j) % 3) % 2 == 0,
+}
+
+def aplicar_mascara(matriz, reservado, num_mascara=0):
+    """Invierte SOLO los módulos de datos (no reservados) que cumplan la fórmula.
+    Devuelve una copia: la matriz original queda intacta para comparar."""
+    formula = MASCARAS[num_mascara]
+    resultado = [fila[:] for fila in matriz]
+    for i in range(TAMANO):
+        for j in range(TAMANO):
+            if not reservado[i][j] and formula(i, j):
+                resultado[i][j] ^= 1
+    return resultado
+
+def verificar_mascara(antes, despues, reservado):
+    """Compara antes/después. Devuelve (datos_modificados, funcionales_intactos)."""
+    datos_modificados = 0
+    funcionales_intactos = True
+    for i in range(TAMANO):
+        for j in range(TAMANO):
+            cambio = antes[i][j] != despues[i][j]
+            if reservado[i][j] and cambio:
+                funcionales_intactos = False
+            if not reservado[i][j] and cambio:
+                datos_modificados += 1
+    return datos_modificados, funcionales_intactos
+
+def mostrar_diferencias(antes, despues):
+    """Marca con ▒▒ los módulos que cambiaron por la máscara."""
+    for i in range(TAMANO):
+        print("".join("▒▒" if antes[i][j] != despues[i][j]
+                      else ("██" if despues[i][j] == 1 else "  ")
+                      for j in range(TAMANO)))
+
+def bits_formato(num_mascara, nivel_ec=0b00):
+    """15 bits de formato: nivel EC (M = 00) + máscara (3 bits) + BCH(15,5), XOR 101010000010010."""
+    datos = (nivel_ec << 3) | num_mascara
+    resto = datos << 10
+    generador = 0b10100110111
+    for k in range(14, 9, -1):
+        if resto >> k & 1:
+            resto ^= generador << (k - 10)
+    return ((datos << 10) | resto) ^ 0b101010000010010
+
+def colocar_formato(matriz, num_mascara=0):
+    """Escribe la información de formato en las áreas ya reservadas (no se enmascara)."""
+    bits = bits_formato(num_mascara)
+    for i in range(15):
+        b = (bits >> i) & 1
+        # copia vertical (columna 8)
+        if i < 6:
+            matriz[i][8] = b
+        elif i < 8:
+            matriz[i + 1][8] = b
+        else:
+            matriz[TAMANO - 15 + i][8] = b
+        # copia horizontal (fila 8)
+        if i < 8:
+            matriz[8][TAMANO - 1 - i] = b
+        elif i == 8:
+            matriz[8][7] = b
+        else:
+            matriz[8][14 - i] = b
+    return bits
 # main / simulación
 if __name__ == "__main__":
     texto = input("Escribe el texto a convertir: ")
@@ -258,5 +335,29 @@ if __name__ == "__main__":
         print("Módulos de datos disponibles:", total)  # debe dar 359
         mostrar_matriz(matriz)
 
+        # ETAPA 5: enmascaramiento
+        MASCARA = 0
+        print("\n--- RESULTADOS ETAPA 5: ENMASCARAMIENTO ---")
+        print("Máscara usada:", MASCARA, "-> fórmula: (fila + columna) % 2 == 0")
+
+        matriz_enmascarada = aplicar_mascara(matriz, reservado, MASCARA)
+
+        print("\nANTES del enmascaramiento:")
+        mostrar_matriz(matriz)
+        print("\nDESPUÉS del enmascaramiento:")
+        mostrar_matriz(matriz_enmascarada)
+        print("\nDiferencias (▒▒ = módulo invertido por la máscara):")
+        mostrar_diferencias(matriz, matriz_enmascarada)
+
+        modificados, intactos = verificar_mascara(matriz, matriz_enmascarada, reservado)
+        print("\nMódulos de datos invertidos:", modificados)
+        print("Módulos funcionales intactos:", "Sí" if intactos else "NO")
+
+        # Información de formato (EC nivel M + máscara) para que el QR sea legible
+        formato = colocar_formato(matriz_enmascarada, MASCARA)
+        print("Bits de formato:", format(formato, "015b"))  # M + máscara 0 = 101010000010010
+
+        print("\n--- MATRIZ QR FINAL ---")
+        mostrar_matriz(matriz_enmascarada)
     except ValueError as e:
         print(f"\nError de validación: {e}")
