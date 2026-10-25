@@ -79,6 +79,72 @@ def construir_etapa3(texto, total_bits=224):
     return bitstream[:total_bits], MODO, contador_longitud, datos_binarios, terminador
 
 # ---------------------------------------------------------------
+# CORRECCIÓN REED-SOLOMON: QR Versión 2, nivel M (un solo bloque)
+# ---------------------------------------------------------------
+PALABRAS_DATOS = 28
+PALABRAS_CORRECCION = 16
+BITS_REMANENTES = 7
+
+
+def multiplicar_gf256(a, b):
+    """Multiplica bytes en GF(256) con el polinomio primitivo QR 0x11D."""
+    producto = 0
+    while b:
+        if b & 1:
+            producto ^= a
+        b >>= 1
+        a <<= 1
+        if a & 0x100:
+            a ^= 0x11D
+    return producto
+
+
+def generar_palabras_correccion(datos, cantidad=PALABRAS_CORRECCION):
+    """Devuelve el resto de dividir datos * x^cantidad entre el generador RS.
+
+    Los coeficientes se ordenan de mayor a menor grado; las raíces del
+    generador son alfa^0, ..., alfa^(cantidad-1), con alfa = 2.
+    """
+    datos = list(datos)
+    if not isinstance(cantidad, int) or not 1 <= cantidad <= 255:
+        raise ValueError("La cantidad de palabras de corrección debe estar entre 1 y 255.")
+    if len(datos) + cantidad > 255:
+        raise ValueError("Un bloque Reed-Solomon no puede superar las 255 palabras.")
+    if any(not isinstance(valor, int) or not 0 <= valor <= 255 for valor in datos):
+        raise ValueError("Cada palabra de datos debe ser un byte entre 0 y 255.")
+
+    # g(x) = (x + alfa^0)(x + alfa^1)...(x + alfa^(cantidad-1)).
+    generador = [1]
+    raiz = 1
+    for _ in range(cantidad):
+        siguiente = [0] * (len(generador) + 1)
+        for i, coeficiente in enumerate(generador):
+            siguiente[i] ^= coeficiente
+            siguiente[i + 1] ^= multiplicar_gf256(coeficiente, raiz)
+        generador = siguiente
+        raiz = multiplicar_gf256(raiz, 2)
+
+    # División polinomial en GF(256): sumar y restar equivale a XOR.
+    dividendo = datos + [0] * cantidad
+    for i in range(len(datos)):
+        factor = dividendo[i]
+        if factor:
+            for j, coeficiente in enumerate(generador):
+                dividendo[i + j] ^= multiplicar_gf256(factor, coeficiente)
+    return dividendo[-cantidad:]
+
+
+def insertar_correccion_errores(bitstream):
+    """Añade las 16 palabras RS y 7 bits remanentes a los 224 bits de datos."""
+    if len(bitstream) != PALABRAS_DATOS * 8 or any(bit not in "01" for bit in bitstream):
+        raise ValueError("Se requieren exactamente 224 bits binarios para un QR versión 2-M.")
+    palabras_datos = [int(bitstream[i:i + 8], 2) for i in range(0, len(bitstream), 8)]
+    palabras_correccion = generar_palabras_correccion(palabras_datos)
+    bits_correccion = "".join(entero_a_binario(valor, 8) for valor in palabras_correccion)
+    # Hay un solo bloque en versión 2-M: no se necesita intercalar bloques.
+    return bitstream + bits_correccion + "0" * BITS_REMANENTES, palabras_correccion
+
+# ---------------------------------------------------------------
 # ETAPA 4: matriz QR e inserción de bits en zigzag
 # ---------------------------------------------------------------
 TAMANO = 25  # Versión 2 = 25x25 módulos
@@ -179,9 +245,15 @@ if __name__ == "__main__":
         print("Bitstream final: ", bitstream)
         print("Bits totales:    ", len(bitstream))
 
+        bitstream_completo, palabras_correccion = insertar_correccion_errores(bitstream)
+        print("\n--- CORRECCIÓN REED-SOLOMON ---")
+        print("Palabras de corrección:", palabras_correccion)
+        print("Bitstream con corrección:", bitstream_completo)
+        print("Bits totales con corrección:", len(bitstream_completo))
+
         # ETAPA 4: matriz y zigzag
         matriz, reservado = preparar_matriz()
-        total = colocar_bits_zigzag(matriz, reservado, bitstream)
+        total = colocar_bits_zigzag(matriz, reservado, bitstream_completo)
         print("\n--- RESULTADOS ETAPA 4 ---")
         print("Módulos de datos disponibles:", total)  # debe dar 359
         mostrar_matriz(matriz)
